@@ -20,14 +20,6 @@ ifneq ($(TARGET_FUSE_SDCARD_GID),)
 common_cflags += -DFUSE_SDCARD_GID=$(TARGET_FUSE_SDCARD_GID)
 endif
 
-ifneq ($(TARGET_USE_CUSTOM_LUN_FILE_PATH),)
-common_cflags += -DCUSTOM_LUN_FILE=\"$(TARGET_USE_CUSTOM_LUN_FILE_PATH)\"
-endif
-
-ifneq ($(TARGET_USE_CUSTOM_SECOND_LUN_NUM),)
-common_cflags += -DCUSTOM_SECOND_LUN_NUM=$(TARGET_USE_CUSTOM_SECOND_LUN_NUM)
-endif
-
 common_cflags += -Werror
 
 common_src_files := \
@@ -51,12 +43,14 @@ common_src_files := \
 
 extra_src_files := \
 	Xwarp.cpp \
+	VoldUtil.c \
 	fstrim.c \
 
 common_c_includes := \
 	$(KERNEL_HEADERS) \
 	system/extras/ext4_utils \
 	external/openssl/include \
+	external/scrypt/lib/crypto \
 	external/e2fsprogs/lib \
 	system/core/fs_mgr/include \
 	system/core/logwrapper/include
@@ -71,6 +65,9 @@ common_libraries := \
 
 common_static_libraries := \
 	libfs_mgr \
+	libext4_utils_static \
+	libscrypt_static \
+	libminshacrypt \
 	libpower
 
 include $(CLEAR_VARS)
@@ -115,7 +112,7 @@ LOCAL_CFLAGS := $(common_cflags) -DMINIVOLD
 LOCAL_STATIC_LIBRARIES := libminivold
 LOCAL_STATIC_LIBRARIES += libc libstdc++
 LOCAL_STATIC_LIBRARIES += $(common_libraries) $(common_static_libraries)
-LOCAL_STATIC_LIBRARIES += libcrypto_static libext2_uuid
+LOCAL_STATIC_LIBRARIES += libcrypto_static libext2_uuid libvold
 LOCAL_FORCE_STATIC_EXECUTABLE := true
 LOCAL_MODULE_CLASS := RECOVERY_EXECUTABLES
 LOCAL_MODULE_PATH := $(TARGET_RECOVERY_ROOT_OUT)/sbin

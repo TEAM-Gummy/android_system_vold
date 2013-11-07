@@ -32,6 +32,7 @@
 
 #include <openssl/md5.h>
 
+#include <cutils/fs.h>
 #include <cutils/log.h>
 #include <cutils/properties.h>
 
@@ -50,6 +51,8 @@
 #include "Asec.h"
 #include "cryptfs.h"
 
+#define MASS_STORAGE_FILE_PATH  "/sys/class/android_usb/android0/f_mass_storage/lun/file"
+
 VolumeManager *VolumeManager::sInstance = NULL;
 
 VolumeManager *VolumeManager::Instance() {
@@ -66,7 +69,6 @@ VolumeManager::VolumeManager() {
     mUmsSharingCount = 0;
     mSavedDirtyRatio = -1;
     mVolManagerDisabled = 0;
-    mNextLunNumber = 0;
 
     // set dirty ratio to ro.vold.umsdirtyratio (default 0) when UMS is active
     char dirtyratio[PROPERTY_VALUE_MAX];
@@ -128,7 +130,6 @@ int VolumeManager::stop() {
 }
 
 int VolumeManager::addVolume(Volume *v) {
-    v->setLunNumber(mNextLunNumber++);
     mVolumes->push_back(v);
     return 0;
 }
@@ -162,7 +163,7 @@ int VolumeManager::listVolumes(SocketClient *cli) {
     for (i = mVolumes->begin(); i != mVolumes->end(); ++i) {
         char *buffer;
         asprintf(&buffer, "%s %s %d",
-                 (*i)->getLabel(), (*i)->getMountpoint(),
+                 (*i)->getLabel(), (*i)->getFuseMountpoint(),
                  (*i)->getState());
         cli->sendMsg(ResponseCode::VolumeListResult, buffer, false);
         free(buffer);
@@ -171,7 +172,7 @@ int VolumeManager::listVolumes(SocketClient *cli) {
     return 0;
 }
 
-int VolumeManager::formatVolume(const char *label, const char *fstype) {
+int VolumeManager::formatVolume(const char *label, bool wipe) {
     Volume *v = lookupVolume(label);
 
     if (!v) {
@@ -184,7 +185,7 @@ int VolumeManager::formatVolume(const char *label, const char *fstype) {
         return -1;
     }
 
-    return v->formatVol(fstype);
+    return v->formatVol(wipe);
 }
 
 int VolumeManager::getObbMountPath(const char *sourceFile, char *mountPath, int mountPathLen) {
@@ -418,7 +419,7 @@ int VolumeManager::createAsec(const char *id, unsigned int numSectors, const cha
         if (usingExt4) {
             formatStatus = Ext4::format(dmDevice, mountPoint);
         } else {
-            formatStatus = Fat::format(dmDevice, numImgSectors);
+            formatStatus = Fat::format(dmDevice, numImgSectors, 0);
         }
 
         if (formatStatus < 0) {
@@ -1057,7 +1058,7 @@ Volume* VolumeManager::getVolumeForFile(const char *fileName) {
     VolumeCollection::iterator i;
 
     for (i = mVolumes->begin(); i != mVolumes->end(); ++i) {
-        const char* mountPoint = (*i)->getMountpoint();
+        const char* mountPoint = (*i)->getFuseMountpoint();
         if (!strncmp(fileName, mountPoint, strlen(mountPoint))) {
             return *i;
         }
@@ -1251,36 +1252,6 @@ int VolumeManager::shareEnabled(const char *label, const char *method, bool *ena
     return 0;
 }
 
-static const char *LUN_FILES[] = {
-#ifdef CUSTOM_LUN_FILE
-    CUSTOM_LUN_FILE,
-#endif
-    /* Only andriod0 exists, but the %d in there is a hack to satisfy the
-       format string and also give a not found error when %d > 0 */
-    "/sys/class/android_usb/android%d/f_mass_storage/lun/file",
-    NULL
-};
-
-int VolumeManager::openLun(int number) {
-    const char **iterator = LUN_FILES;
-    char qualified_lun[255];
-    while (*iterator) {
-        bzero(qualified_lun, 255);
-        snprintf(qualified_lun, 254, *iterator, number);
-        int fd = open(qualified_lun, O_WRONLY);
-        if (fd >= 0) {
-            SLOGD("Opened lunfile %s", qualified_lun);
-            return fd;
-        }
-        SLOGE("Unable to open ums lunfile %s (%s)", qualified_lun, strerror(errno));
-        iterator++;
-    }
-
-    errno = EINVAL;
-    SLOGE("Unable to find ums lunfile for LUN %d", number);
-    return -1;
-}
-
 int VolumeManager::shareVolume(const char *label, const char *method) {
     Volume *v = lookupVolume(label);
 
@@ -1305,7 +1276,7 @@ int VolumeManager::shareVolume(const char *label, const char *method) {
     }
 
     if (v->getState() != Volume::State_Idle) {
-        // You need to unmount manually before sharing
+        // You need to unmount manually befoe sharing
         errno = EBUSY;
         return -1;
     }
@@ -1333,7 +1304,7 @@ int VolumeManager::shareVolume(const char *label, const char *method) {
     }
 #endif
 
-    int fd, lun_number;
+    int fd;
     char nodepath[255];
     int written = snprintf(nodepath,
              sizeof(nodepath), "/dev/block/vold/%d:%d",
@@ -1344,11 +1315,8 @@ int VolumeManager::shareVolume(const char *label, const char *method) {
         return -1;
     }
 
-    if ((lun_number = v->getLunNumber()) == -1) {
-        return -1;
-    }
-
-    if ((fd = openLun(lun_number)) < 0) {
+    if ((fd = open(MASS_STORAGE_FILE_PATH, O_WRONLY)) < 0) {
+        SLOGE("Unable to open ums lunfile (%s)", strerror(errno));
         return -1;
     }
 
@@ -1396,13 +1364,9 @@ int VolumeManager::unshareVolume(const char *label, const char *method) {
         return -1;
     }
 
-    int fd, lun_number;
-
-    if ((lun_number = v->getLunNumber()) == -1) {
-        return -1;
-    }
-
-    if ((fd = openLun(lun_number)) < 0) {
+    int fd;
+    if ((fd = open(MASS_STORAGE_FILE_PATH, O_WRONLY)) < 0) {
+        SLOGE("Unable to open ums lunfile (%s)", strerror(errno));
         return -1;
     }
 
@@ -1563,7 +1527,7 @@ Volume *VolumeManager::lookupVolume(const char *label) {
 
     for (i = mVolumes->begin(); i != mVolumes->end(); ++i) {
         if (label[0] == '/') {
-            if (!strcmp(label, (*i)->getMountpoint()))
+            if (!strcmp(label, (*i)->getFuseMountpoint()))
                 return (*i);
         } else {
             if (!strcmp(label, (*i)->getLabel()))
@@ -1600,10 +1564,6 @@ bool VolumeManager::isMountpointMounted(const char *mp)
 }
 
 int VolumeManager::cleanupAsec(Volume *v, bool force) {
-    /* Only EXTERNAL_STORAGE needs ASEC cleanup. */
-    if (!v->isPrimaryStorage())
-        return 0;
-
     int rc = unmountAllAsecsInDir(Volume::SEC_ASECDIR_EXT);
 
     AsecIdCollection toUnmount;
@@ -1625,7 +1585,7 @@ int VolumeManager::cleanupAsec(Volume *v, bool force) {
 
     for (AsecIdCollection::iterator it = toUnmount.begin(); it != toUnmount.end(); ++it) {
         ContainerData *cd = *it;
-        SLOGI("Unmounting ASEC %s (dependant on %s)", cd->id, v->getMountpoint());
+        SLOGI("Unmounting ASEC %s (dependant on %s)", cd->id, v->getFuseMountpoint());
         if (unmountObb(cd->id, force)) {
             SLOGE("Failed to unmount OBB %s (%s)", cd->id, strerror(errno));
             rc = -1;
@@ -1633,6 +1593,26 @@ int VolumeManager::cleanupAsec(Volume *v, bool force) {
     }
 
     return rc;
-
 }
 
+int VolumeManager::mkdirs(char* path) {
+    // Require that path lives under a volume we manage
+    const char* emulated_source = getenv("EMULATED_STORAGE_SOURCE");
+    const char* root = NULL;
+    if (!strncmp(path, emulated_source, strlen(emulated_source))) {
+        root = emulated_source;
+    } else {
+        Volume* vol = getVolumeForFile(path);
+        if (vol) {
+            root = vol->getMountpoint();
+        }
+    }
+
+    if (!root) {
+        SLOGE("Failed to find volume for %s", path);
+        return -EINVAL;
+    }
+
+    /* fs_mkdirs() does symlink checking and relative path enforcement */
+    return fs_mkdirs(path, 0700);
+}
