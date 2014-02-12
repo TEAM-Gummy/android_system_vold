@@ -60,8 +60,8 @@ CommandListener::CommandListener() :
 #endif
 }
 
-void CommandListener::dumpArgs(int argc, char **argv, int argObscure) {
 #if DUMP_ARGS
+void CommandListener::dumpArgs(int argc, char **argv, int argObscure) {
     char buffer[4096];
     char *p = buffer;
 
@@ -87,15 +87,17 @@ void CommandListener::dumpArgs(int argc, char **argv, int argObscure) {
         }
     }
     SLOGD("%s", buffer);
-#endif
 }
+#else
+void CommandListener::dumpArgs(int /*argc*/, char ** /*argv*/, int /*argObscure*/) { }
+#endif
 
 CommandListener::DumpCmd::DumpCmd() :
                  VoldCommand("dump") {
 }
 
 int CommandListener::DumpCmd::runCommand(SocketClient *cli,
-                                         int argc, char **argv) {
+                                         int /*argc*/, char ** /*argv*/) {
     cli->sendMsg(0, "Dumping loop status", false);
     if (Loop::dumpState(cli)) {
         cli->sendMsg(ResponseCode::CommandOkay, "Loop dump failed", true);

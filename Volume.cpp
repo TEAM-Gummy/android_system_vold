@@ -171,7 +171,7 @@ void Volume::handleVolumeShared() {
 void Volume::handleVolumeUnshared() {
 }
 
-int Volume::handleBlockEvent(NetlinkEvent *evt) {
+int Volume::handleBlockEvent(NetlinkEvent * /*evt*/) {
     errno = ENOSYS;
     return -1;
 }
