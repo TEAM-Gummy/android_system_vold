@@ -54,6 +54,7 @@ int Exfat::doMount(const char *fsPath, const char *mountPoint,
     char mountData[255];
     const char *args[6];
     int status;
+    remount = remount;
 
     if (access(EXFAT_MOUNT, X_OK)) {
         SLOGE("Unable to mount, exFAT FUSE helper not found!");
